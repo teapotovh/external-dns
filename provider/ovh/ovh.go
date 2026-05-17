@@ -163,6 +163,7 @@ func (p *OVHProvider) Records(ctx context.Context) ([]*endpoint.Endpoint, error)
 	p.lastRunRecords = records
 	p.lastRunZones = zones
 	endpoints := ovhGroupByNameAndType(records)
+	endpoints = ovhAddLabels(endpoints)
 	log.Infof("OVH: %d endpoints have been found", len(endpoints))
 	return endpoints, nil
 }
@@ -332,7 +333,7 @@ func (p *OVHProvider) change(ctx context.Context, change ovhChange) error {
 	case ovhCreate:
 		log.Debugf("OVH: Add an entry to %s", change.String())
 		if p.DryRun {
-			log.Infof("OVH: Dry-run: Would have created a DNS record for zone %s", change.Zone)
+			log.Infof("OVH: Dry-run: Would have created a DNS record: %q", change.String())
 			return nil
 		}
 		return p.client.PostWithContext(ctx, fmt.Sprintf("/domain/zone/%s/record", url.PathEscape(change.Zone)), change.ovhRecordFields, nil)
@@ -342,7 +343,7 @@ func (p *OVHProvider) change(ctx context.Context, change ovhChange) error {
 		}
 		log.Debugf("OVH: Delete an entry to %s", change.String())
 		if p.DryRun {
-			log.Infof("OVH: Dry-run: Would have deleted a DNS record for zone %s", change.Zone)
+			log.Infof("OVH: Dry-run: Would have deleted a DNS record: %q", change.String())
 			return nil
 		}
 		return p.client.DeleteWithContext(ctx, fmt.Sprintf("/domain/zone/%s/record/%d", url.PathEscape(change.Zone), change.ID), nil)
@@ -352,7 +353,7 @@ func (p *OVHProvider) change(ctx context.Context, change ovhChange) error {
 		}
 		log.Debugf("OVH: Update an entry to %s", change.String())
 		if p.DryRun {
-			log.Infof("OVH: Dry-run: Would have updated a DNS record for zone %s", change.Zone)
+			log.Infof("OVH: Dry-run: Would have updated a DNS record: %q", change.String())
 			return nil
 		}
 		return p.client.PutWithContext(ctx, fmt.Sprintf("/domain/zone/%s/record/%d", url.PathEscape(change.Zone), change.ID), change.ovhRecordFieldUpdate, nil)
@@ -517,6 +518,56 @@ func ovhGroupByNameAndType(records []ovhRecord) []*endpoint.Endpoint {
 			targets...,
 		)
 		endpoints = append(endpoints, ep)
+	}
+
+	return endpoints
+}
+
+func couldBeLabel(e *endpoint.Endpoint) bool {
+	if e.RecordType != endpoint.RecordTypeTXT {
+		return false
+	}
+
+	if len(e.Targets) <= 0 {
+		return false
+	}
+
+	parts := strings.Split(e.DNSName, "-")
+	if len(parts) <= 1 {
+		return false
+	}
+
+	return slices.Contains(endpoint.KnownRecordTypes, strings.ToUpper(parts[0]))
+}
+
+func labelName(endpoint *endpoint.Endpoint) string {
+	return strings.ToLower(endpoint.RecordType) + "-" + endpoint.DNSName
+}
+
+func ovhAddLabels(endpoints []*endpoint.Endpoint) []*endpoint.Endpoint {
+	potentialLabels := map[string]endpoint.Labels{}
+
+	// First pass: take all TXT RRSets that could be labels and populate potentialLabels
+	for _, e := range endpoints {
+		if couldBeLabel(e) {
+			labels, err := endpoint.NewLabelsFromStringPlain(e.Targets[0])
+			if err != nil && log.IsLevelEnabled(log.DebugLevel) {
+				log.Debugf("OVH: ignoring potential labels in Endpoint due to error: %v", err)
+				continue
+			}
+
+			potentialLabels[e.DNSName] = labels
+		}
+	}
+
+	for _, e := range endpoints {
+		if _, isLabel := potentialLabels[e.DNSName]; isLabel {
+			continue
+		}
+
+		if labels, hasLabels := potentialLabels[labelName(e)]; hasLabels {
+			e.Labels = labels
+		}
 	}
 
 	return endpoints
