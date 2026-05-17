@@ -164,8 +164,26 @@ func (p *OVHProvider) Records(ctx context.Context) ([]*endpoint.Endpoint, error)
 	p.lastRunZones = zones
 	endpoints := ovhGroupByNameAndType(records)
 	endpoints = ovhAddLabels(endpoints)
+	endpoints = ignore(endpoints)
 	log.Infof("OVH: %d endpoints have been found", len(endpoints))
 	return endpoints, nil
+}
+
+func ignore(endpoints []*endpoint.Endpoint) []*endpoint.Endpoint {
+	result := make([]*endpoint.Endpoint, 0, len(endpoints))
+	for _, e := range endpoints {
+		filtered := make(endpoint.Targets, 0, len(e.Targets))
+		for _, t := range e.Targets {
+			if t != "89.58.54.131" {
+				filtered = append(filtered, t)
+			}
+		}
+		if len(filtered) > 0 {
+			e.Targets = filtered
+			result = append(result, e)
+		}
+	}
+	return result
 }
 
 func planChangesByZoneName(zones []string, changes *plan.Changes) (map[string]*plan.Changes, error) {
@@ -272,6 +290,11 @@ func (p *OVHProvider) ApplyChanges(ctx context.Context, changes *plan.Changes) e
 		p.lastRunRecords = []ovhRecord{}
 		p.lastRunZones = []string{}
 	}()
+
+	changes.Create = ignore(changes.Create)
+	changes.UpdateOld = ignore(changes.UpdateOld)
+	changes.UpdateNew = ignore(changes.UpdateNew)
+	changes.Delete = ignore(changes.Delete)
 
 	if log.IsLevelEnabled(log.DebugLevel) {
 		for _, change := range changes.Create {
