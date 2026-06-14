@@ -165,6 +165,7 @@ func (p *OVHProvider) Records(ctx context.Context) ([]*endpoint.Endpoint, error)
 	endpoints := ovhGroupByNameAndType(records)
 	endpoints = ovhAddLabels(endpoints)
 	endpoints = ignore(endpoints)
+	endpoints = joinLongTXT(endpoints)
 	log.Infof("OVH: %d endpoints have been found", len(endpoints))
 	return endpoints, nil
 }
@@ -184,6 +185,20 @@ func ignore(endpoints []*endpoint.Endpoint) []*endpoint.Endpoint {
 		}
 	}
 	return result
+}
+
+func joinLongTXT(endpoints []*endpoint.Endpoint) []*endpoint.Endpoint {
+	for i, e := range endpoints {
+		if e.RecordType != endpoint.RecordTypeTXT {
+			continue
+		}
+		for j := range e.Targets {
+			endpoints[i].Targets[j] = strings.ReplaceAll(e.Targets[j], "\" \"", "")
+			endpoints[i].Targets[j] = strings.Trim(endpoints[i].Targets[j], "\"")
+		}
+	}
+
+	return endpoints
 }
 
 func planChangesByZoneName(zones []string, changes *plan.Changes) (map[string]*plan.Changes, error) {
